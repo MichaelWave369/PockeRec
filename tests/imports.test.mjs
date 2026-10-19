@@ -18,7 +18,7 @@ test('non-audio, empty and oversize files fail before decode',()=>{
 });
 test('filename sanitization and preservation of original suffix',()=>{
   assert.equal(importedTitle('  Mix _ 01  .WAV'),'Mix _ 01');
-  assert.equal(importedTitle('bad/bad\\\\name.mp3'),'bad bad  name');
+  assert.equal(importedTitle('bad/bad\\\\name.mp3'),'bad bad name');
   const take=makeImportedTake(mock('DJ-Drop.MP3',1200,'audio/mpeg'),2,2,100,'id-1');
   assert.equal(take.name,'DJ-Drop');
   assert.equal(take.originalExtension,'mp3');
