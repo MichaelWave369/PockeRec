@@ -42,11 +42,27 @@ function ascii(view, index, value) {
   for (let i = 0; i < value.length; i++) view.setUint8(index + i, value.charCodeAt(i));
 }
 
-// Uncompressed signed 16-bit, interleaved PCM. Conversion never improves native codec quality.
-export function encodeWav(buffer) {
+// Convert seconds to bounded PCM frame indices without copying or modifying source audio.
+// The decoded buffer may be longer/shorter than the recorder's wall-clock estimate.
+export function pcmClipFrames(buffer, startSeconds = 0, endSeconds = buffer.length / buffer.sampleRate) {
+  if (!Number.isFinite(buffer.sampleRate) || buffer.sampleRate <= 0 || !Number.isInteger(buffer.length) || buffer.length <= 0) {
+    throw new Error('Invalid audio buffer');
+  }
+  if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds) || startSeconds < 0 || endSeconds <= startSeconds) {
+    throw new Error('Invalid clip selection');
+  }
+  const start = Math.min(buffer.length, Math.floor(startSeconds * buffer.sampleRate));
+  const end = Math.min(buffer.length, Math.ceil(endSeconds * buffer.sampleRate));
+  if (start >= end) throw new Error('Clip selection is outside the audio');
+  return { start, end, length: end - start };
+}
+
+// Uncompressed signed 16-bit, interleaved PCM. Optional range is non-destructive.
+// Conversion never improves native codec quality.
+export function encodeWav(buffer, range) {
   const channels = Math.min(2, buffer.numberOfChannels);
   if (channels < 1) throw new Error('No audio channels');
-  const frames = buffer.length;
+  const { start, length: frames } = range ? pcmClipFrames(buffer, range.startSeconds, range.endSeconds) : pcmClipFrames(buffer);
   const bytes = frames * channels * 2;
   if (bytes > 0xffffffff - 44) throw new Error('This recording is too long for one WAV file');
   const out = new ArrayBuffer(44 + bytes);
@@ -61,7 +77,7 @@ export function encodeWav(buffer) {
   const samples = Array.from({ length: channels }, (_, n) => buffer.getChannelData(n));
   let offset = 44;
   for (let i = 0; i < frames; i++) for (let c = 0; c < channels; c++) {
-    const sample = Math.max(-1, Math.min(1, samples[c][i]));
+    const sample = Math.max(-1, Math.min(1, samples[c][i + start]));
     view.setInt16(offset, sample < 0 ? Math.round(sample * 32768) : Math.round(sample * 32767), true);
     offset += 2;
   }

@@ -88,7 +88,7 @@ function TakeCard({ take, onPlay, onRename, onDelete, onDownload, onWav, exporti
       </div>
       <div className="clip-actions">
         <button type="button" onClick={() => onDownload(take)} aria-label={`Download ${take.name} in original format`}>Download</button>
-        <button type="button" disabled={exporting === take.id} onClick={() => onWav(take)} aria-label={`Download ${take.name} as WAV`}>{exporting === take.id ? 'Exporting…' : 'WAV'}</button>
+        <button type="button" disabled={exporting !== null} onClick={() => onWav(take)} aria-label={`Download ${take.name} as WAV`}>{exporting === take.id ? 'Exporting…' : 'WAV'}</button>
         <button type="button" className="danger" onClick={() => onDelete(take)} aria-label={`Delete ${take.name}`}>Delete</button>
       </div>
     </article>
@@ -108,6 +108,9 @@ export default function App() {
   const [playerUrl, setPlayerUrl] = useState(null);
   const [exporting, setExporting] = useState(null);
   const [toast, setToast] = useState('');
+  const [clipDuration, setClipDuration] = useState(0);
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
   const phaseRef = useRef('idle');
   const analyserRef = useRef(null);
   const streamRef = useRef(null);
@@ -123,6 +126,7 @@ export default function App() {
   const mountedRef = useRef(true);
   const playerRef = useRef(null);
   const playerUrlRef = useRef(null);
+  const previewOnlyRef = useRef(false);
   const toastTimerRef = useRef(null);
 
   const setRecordingPhase = (value) => { phaseRef.current = value; if (mountedRef.current) setPhase(value); };
@@ -139,9 +143,11 @@ export default function App() {
 
   function closePlayer() {
     playerRef.current?.pause();
+    previewOnlyRef.current = false;
     if (playerUrlRef.current) URL.revokeObjectURL(playerUrlRef.current);
     playerUrlRef.current = null;
     setPlayerUrl(null); setSelected(null);
+    setClipDuration(0); setTrimStart(0); setTrimEnd(0);
   }
 
   useEffect(() => {
@@ -280,12 +286,15 @@ export default function App() {
 
   function playTake(take) {
     if (selected?.id === take.id) {
+      previewOnlyRef.current = false;
       if (playerRef.current?.paused) playerRef.current.play().catch(() => showToast('Playback blocked. Use player controls.'));
       else playerRef.current?.pause();
       return;
     }
     closePlayer();
     const url = URL.createObjectURL(take.blob); playerUrlRef.current = url;
+    const duration = Number.isFinite(take.durationMs) ? Math.max(0, take.durationMs / 1000) : 0;
+    setClipDuration(duration); setTrimStart(0); setTrimEnd(duration);
     setSelected(take); setPlayerUrl(url);
   }
 
@@ -293,11 +302,48 @@ export default function App() {
     if (playerUrl && playerRef.current) playerRef.current.play().catch(() => showToast('Press play on the audio player to listen.'));
   }, [playerUrl]);
 
+  function onAudioMetadata(event) {
+    const duration = event.currentTarget.duration;
+    // Some MediaRecorder containers expose Infinity; keep the recorded estimate then.
+    if (Number.isFinite(duration) && duration > 0) {
+      setClipDuration(duration); setTrimStart(0); setTrimEnd(duration);
+    }
+  }
+
+  function setTrimBoundary(which, value) {
+    const length = clipDuration;
+    if (!length || !Number.isFinite(value)) return;
+    const gap = Math.min(0.1, length);
+    previewOnlyRef.current = false;
+    playerRef.current?.pause();
+    if (which === 'start') setTrimStart(Math.max(0, Math.min(value, trimEnd - gap)));
+    else setTrimEnd(Math.min(length, Math.max(value, trimStart + gap)));
+  }
+
+  function previewTrim() {
+    const player = playerRef.current;
+    if (!player || trimEnd <= trimStart) return;
+    try {
+      player.pause();
+      player.currentTime = trimStart;
+      previewOnlyRef.current = true;
+      player.play().catch(() => { previewOnlyRef.current = false; showToast('Preview unavailable. Try the standard player.'); });
+    } catch (error) { console.error(error); previewOnlyRef.current = false; showToast('Unable to preview this selection.'); }
+  }
+
+  function onPreviewProgress(event) {
+    const player = event.currentTarget;
+    if (previewOnlyRef.current && player.currentTime >= trimEnd - 0.02) {
+      previewOnlyRef.current = false;
+      player.pause();
+    }
+  }
+
   function downloadTake(take) { downloadBlob(take.blob, `${safeFilename(take.name)}.${extensionFor(take.mimeType || take.blob.type)}`); }
 
-  async function downloadWav(take) {
+  async function downloadWav(take, clip = false) {
     if (exporting !== null) return;
-    setExporting(take.id);
+    setExporting(clip ? `clip:${take.id}` : take.id);
     let ctx;
     try {
       const Context = window.AudioContext || window.webkitAudioContext;
@@ -305,9 +351,11 @@ export default function App() {
       ctx = new Context();
       const data = await take.blob.arrayBuffer();
       const buffer = await ctx.decodeAudioData(data);
-      downloadBlob(encodeWav(buffer), `${safeFilename(take.name)}.wav`);
-      showToast('WAV file downloaded.');
-    } catch (error) { console.error('WAV export failed', error); showToast('WAV export failed. Try the original download.'); }
+      const range = clip ? { startSeconds: trimStart, endSeconds: trimEnd } : undefined;
+      const suffix = clip ? `-clip-${formatTime(trimStart * 1000, true).replace(':', 'm').replace('.', 's')}-${formatTime(trimEnd * 1000, true).replace(':', 'm').replace('.', 's')}` : '';
+      downloadBlob(encodeWav(buffer, range), `${safeFilename(take.name)}${suffix}.wav`);
+      showToast(clip ? 'Trimmed WAV downloaded. Original take preserved.' : 'WAV file downloaded.');
+    } catch (error) { console.error('WAV export failed', error); showToast('Could not decode/export WAV. Try the original download.'); }
     finally { if (ctx) await ctx.close().catch(() => {}); if (mountedRef.current) setExporting(null); }
   }
 
@@ -363,10 +411,26 @@ export default function App() {
               <div className="library-bottom"><span className="local-dot" />{temporary ? 'TEMPORARY SESSION STORAGE — DOWNLOAD TO KEEP' : 'LOCAL BROWSER STORAGE'}</div>
             </section>
           </div>
-          {selected && <section className="player-panel" aria-label="Playback"><div className="player-title"><span className="player-icon">♫</span><div><span>NOW PLAYING</span><strong>{selected.name}</strong></div><button type="button" aria-label="Close audio player" onClick={closePlayer}>×</button></div>
-            <audio ref={playerRef} controls preload="metadata" src={playerUrl} /></section>}
+          {selected && <section className="player-panel" aria-label="Playback and clip editor">
+            <div className="player-title"><span className="player-icon">♫</span><div><span>NOW PLAYING / EDITING</span><strong>{selected.name}</strong></div><button type="button" aria-label="Close audio player" onClick={closePlayer}>×</button></div>
+            <audio ref={playerRef} controls preload="metadata" src={playerUrl} onLoadedMetadata={onAudioMetadata} onTimeUpdate={onPreviewProgress} onPause={() => { previewOnlyRef.current = false; }} />
+            <div className="trim-editor" aria-label="Non-destructive audio clip editor">
+              <div className="trim-head"><div><span className="trim-eyebrow">03 / CLIP EDITOR</span><h2>Keep the good part.</h2></div><span className="trim-time">{formatTime(Math.max(0, trimEnd - trimStart) * 1000, true)} SELECTED</span></div>
+              <p>Choose an in and out point, preview it, then export a new WAV. Your original recording stays untouched.</p>
+              {clipDuration > 0 ? <>
+                <div className="trim-track" role="img" aria-label={`Selected segment from ${formatTime(trimStart * 1000, true)} to ${formatTime(trimEnd * 1000, true)} of ${formatTime(clipDuration * 1000, true)}`}>
+                  <span className="trim-track-region" style={{ left: `${trimStart / clipDuration * 100}%`, width: `${Math.max(0, (trimEnd - trimStart) / clipDuration * 100)}%` }} />
+                </div>
+                <div className="trim-inputs">
+                  <label><span>IN <strong>{formatTime(trimStart * 1000, true)}</strong></span><input aria-label="Trim start time" type="range" min="0" max={clipDuration} step="0.01" value={trimStart} onChange={(event) => setTrimBoundary('start', Number(event.target.value))} /></label>
+                  <label><span>OUT <strong>{formatTime(trimEnd * 1000, true)}</strong></span><input aria-label="Trim end time" type="range" min="0" max={clipDuration} step="0.01" value={trimEnd} onChange={(event) => setTrimBoundary('end', Number(event.target.value))} /></label>
+                </div>
+                <div className="trim-actions"><button type="button" onClick={previewTrim}>▶ Preview selection</button><button type="button" onClick={() => { previewOnlyRef.current = false; playerRef.current?.pause(); setTrimStart(0); setTrimEnd(clipDuration); }}>Reset trim</button><button className="export-clip" disabled={exporting !== null || trimEnd <= trimStart} type="button" onClick={() => downloadWav(selected, true)}>{exporting === `clip:${selected.id}` ? 'Exporting…' : '↓ Export clip WAV'}</button></div>
+              </> : <p className="trim-unavailable">Clip editing will be available once this audio's duration can be determined.</p>}
+            </div>
+          </section>}
         </main>
-        <footer><span>POCKETREC / V1.0</span><span>RECORD FREELY. SHARE INTENTIONALLY.</span><span>REACT + VITE • MIT</span></footer>
+        <footer><span>POCKETREC / V1.1</span><span>RECORD FREELY. SHARE INTENTIONALLY.</span><span>REACT + VITE • MIT</span></footer>
       </div>
       <div className={`toast ${toast ? 'show' : ''}`} role="status" aria-live="polite">{toast}</div>
     </>
