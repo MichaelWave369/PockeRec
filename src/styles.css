@@ -39,3 +39,10 @@
 .finish-toggle small{font-size:10px;color:#a9bba9;line-height:1.5;margin-top:5px}
 .finish-advice{color:#abbcaa!important;margin:17px 0 0!important;font-size:11px!important}
 @media(max-width:600px){.finish-desk{padding:15px}.finish-grid{grid-template-columns:1fr;gap:18px}}
+
+/* v1.4: private, non-destructive effects rack */
+.effects-rack{margin-top:18px;border:1px solid #657a66;background:linear-gradient(140deg,#22352d,#192a26);border-radius:12px;padding:20px}
+.rack-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px 25px}
+.rack-grid .finish-control small{color:#a9c2ad;font-size:11px;line-height:1.5}
+.rack-grid .finish-control input{accent-color:#c9e8ad}
+@media(max-width:600px){.effects-rack{padding:15px}.rack-grid{grid-template-columns:1fr;gap:18px}}
