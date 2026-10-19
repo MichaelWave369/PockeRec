@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { chooseMimeType, downloadBlob, encodeWav, extensionFor, formatSize, formatTime, safeFilename } from './audio.js';
 import { hasTemporaryStorage, initStorage, listTakes, putTake, removeTake } from './storage.js';
+import ClipWaveform from './ClipWaveform.jsx';
+import { buildWaveformPeaks } from './waveform.js';
 
 const initialNote = 'Your browser will ask to use your microphone when you press record.';
 
@@ -111,6 +113,9 @@ export default function App() {
   const [clipDuration, setClipDuration] = useState(0);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
+  const [wavePeaks, setWavePeaks] = useState(null);
+  const [waveStatus, setWaveStatus] = useState('idle');
+  const [playerTime, setPlayerTime] = useState(0);
   const phaseRef = useRef('idle');
   const analyserRef = useRef(null);
   const streamRef = useRef(null);
@@ -148,6 +153,7 @@ export default function App() {
     playerUrlRef.current = null;
     setPlayerUrl(null); setSelected(null);
     setClipDuration(0); setTrimStart(0); setTrimEnd(0);
+    setPlayerTime(0); setWavePeaks(null); setWaveStatus('idle');
   }
 
   useEffect(() => {
@@ -294,13 +300,54 @@ export default function App() {
     closePlayer();
     const url = URL.createObjectURL(take.blob); playerUrlRef.current = url;
     const duration = Number.isFinite(take.durationMs) ? Math.max(0, take.durationMs / 1000) : 0;
-    setClipDuration(duration); setTrimStart(0); setTrimEnd(duration);
+    setClipDuration(duration); setTrimStart(0); setTrimEnd(duration); setPlayerTime(0);
     setSelected(take); setPlayerUrl(url);
   }
 
   useEffect(() => {
     if (playerUrl && playerRef.current) playerRef.current.play().catch(() => showToast('Press play on the audio player to listen.'));
   }, [playerUrl]);
+
+  useEffect(() => {
+    if (!selected?.blob) return;
+    let active = true;
+    let audioContext;
+    setWavePeaks(null); setWaveStatus('loading');
+    async function analyseTake() {
+      // Avoid automatically expanding unusually large recordings into uncompressed PCM.
+      if (selected.blob.size > 80 * 1024 * 1024 || selected.durationMs > 90 * 60 * 1000) {
+        if (active) setWaveStatus('large');
+        return;
+      }
+      const Context = window.AudioContext || window.webkitAudioContext;
+      if (!Context) throw new Error('No Web Audio decoder available');
+      audioContext = new Context();
+      const decoded = await audioContext.decodeAudioData(await selected.blob.arrayBuffer());
+      const peaks = buildWaveformPeaks(decoded, 512);
+      if (!active) return;
+      setWavePeaks(peaks);
+      setWaveStatus('ready');
+      if (Number.isFinite(decoded.duration) && decoded.duration > 0) {
+        setClipDuration(decoded.duration);
+        setTrimStart(0); setTrimEnd(decoded.duration);
+      }
+    }
+    analyseTake().catch((error) => {
+      console.warn('Waveform decode unavailable:', error);
+      if (active) setWaveStatus('failed');
+    }).finally(() => { if (audioContext) void audioContext.close().catch(() => {}); });
+    return () => { active = false; };
+  }, [selected?.id]);
+
+  function seekTimeline(time) {
+    const player = playerRef.current;
+    if (!player || !Number.isFinite(time)) return;
+    try {
+      previewOnlyRef.current = false;
+      player.currentTime = Math.max(0, Math.min(clipDuration, time));
+      setPlayerTime(player.currentTime);
+    } catch { showToast('Could not seek this recording.'); }
+  }
 
   function onAudioMetadata(event) {
     const duration = event.currentTarget.duration;
@@ -413,14 +460,17 @@ export default function App() {
           </div>
           {selected && <section className="player-panel" aria-label="Playback and clip editor">
             <div className="player-title"><span className="player-icon">♫</span><div><span>NOW PLAYING / EDITING</span><strong>{selected.name}</strong></div><button type="button" aria-label="Close audio player" onClick={closePlayer}>×</button></div>
-            <audio ref={playerRef} controls preload="metadata" src={playerUrl} onLoadedMetadata={onAudioMetadata} onTimeUpdate={onPreviewProgress} onPause={() => { previewOnlyRef.current = false; }} />
+            <audio ref={playerRef} controls preload="metadata" src={playerUrl} onLoadedMetadata={onAudioMetadata} onTimeUpdate={(event) => { setPlayerTime(event.currentTarget.currentTime); onPreviewProgress(event); }} onSeeked={(event) => setPlayerTime(event.currentTarget.currentTime)} onPause={() => { previewOnlyRef.current = false; }} />
             <div className="trim-editor" aria-label="Non-destructive audio clip editor">
               <div className="trim-head"><div><span className="trim-eyebrow">03 / CLIP EDITOR</span><h2>Keep the good part.</h2></div><span className="trim-time">{formatTime(Math.max(0, trimEnd - trimStart) * 1000, true)} SELECTED</span></div>
-              <p>Choose an in and out point, preview it, then export a new WAV. Your original recording stays untouched.</p>
+              <p>Drag the IN/OUT markers on the waveform, or use the precise sliders; preview, then export a new WAV. Your original recording stays untouched.</p>
               {clipDuration > 0 ? <>
-                <div className="trim-track" role="img" aria-label={`Selected segment from ${formatTime(trimStart * 1000, true)} to ${formatTime(trimEnd * 1000, true)} of ${formatTime(clipDuration * 1000, true)}`}>
-                  <span className="trim-track-region" style={{ left: `${trimStart / clipDuration * 100}%`, width: `${Math.max(0, (trimEnd - trimStart) / clipDuration * 100)}%` }} />
-                </div>
+                {waveStatus === 'ready' && wavePeaks ? <ClipWaveform peaks={wavePeaks} duration={clipDuration} start={trimStart} end={trimEnd} playhead={playerTime} onBoundaryChange={setTrimBoundary} onSeek={seekTimeline} /> : <>
+                  <div className="trim-track" role="img" aria-label="Approximate clip selection without waveform">
+                    <span className="trim-track-region" style={{ left: `${trimStart / clipDuration * 100}%`, width: `${Math.max(0, (trimEnd - trimStart) / clipDuration * 100)}%` }} />
+                  </div>
+                  <p className="waveform-status" role="status">{waveStatus === 'loading' ? 'Building the recorded waveform locally…' : waveStatus === 'large' ? 'Waveform skipped for a long or large recording; trim sliders remain available.' : waveStatus === 'failed' ? 'Waveform preview unavailable for this file; precise trim sliders still work.' : 'Preparing timeline…'}</p>
+                </>}
                 <div className="trim-inputs">
                   <label><span>IN <strong>{formatTime(trimStart * 1000, true)}</strong></span><input aria-label="Trim start time" type="range" min="0" max={clipDuration} step="0.01" value={trimStart} onChange={(event) => setTrimBoundary('start', Number(event.target.value))} /></label>
                   <label><span>OUT <strong>{formatTime(trimEnd * 1000, true)}</strong></span><input aria-label="Trim end time" type="range" min="0" max={clipDuration} step="0.01" value={trimEnd} onChange={(event) => setTrimBoundary('end', Number(event.target.value))} /></label>
@@ -430,7 +480,7 @@ export default function App() {
             </div>
           </section>}
         </main>
-        <footer><span>POCKETREC / V1.1</span><span>RECORD FREELY. SHARE INTENTIONALLY.</span><span>REACT + VITE • MIT</span></footer>
+        <footer><span>POCKETREC / V1.2</span><span>RECORD FREELY. SHARE INTENTIONALLY.</span><span>REACT + VITE • MIT</span></footer>
       </div>
       <div className={`toast ${toast ? 'show' : ''}`} role="status" aria-live="polite">{toast}</div>
     </>
