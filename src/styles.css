@@ -21,3 +21,21 @@
 .waveform-ruler{padding:10px 0 0;color:#b7ccbb;font-size:10px}
 .waveform-access,.waveform-status{font-size:11px!important;color:#9fbdab!important;margin:10px 0 0}
 @media(max-width:600px){.waveform-timeline-label span{font-size:10px}.waveform-timeline-frame,.waveform-timeline-canvas{height:120px}.clip-marker{width:30px}.waveform-access{line-height:1.5}}
+
+/* v1.3: finishing desk */
+.finish-desk{margin-top:22px;padding:19px;border:1px solid #61745f;border-radius:12px;background:#1d2b26}
+.finish-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.finish-heading h3{font-size:19px;margin:6px 0 0;letter-spacing:-.4px}
+.finish-heading button{border:1px solid #607964;border-radius:8px;padding:8px 12px;color:#d4e7cb;background:#344839;font-size:11px;font-weight:800}
+.finish-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 22px}
+.finish-control{display:flex;flex-direction:column;gap:13px;min-width:0;color:#c1d9c0}
+.finish-control>span{font-size:11px;font-weight:800;letter-spacing:.8px;display:flex;justify-content:space-between;gap:6px}
+.finish-control strong{font-family:Consolas,monospace;color:#ffe0bc;letter-spacing:0;font-size:12px}
+.finish-control input{width:100%;accent-color:#ffae88;cursor:pointer}
+.finish-toggle{display:flex;align-items:center;gap:11px;padding:11px;border:1px solid #4c6653;border-radius:8px;cursor:pointer}
+.finish-toggle input{width:20px;height:20px;accent-color:#c8eaaa;flex:none}
+.finish-toggle strong,.finish-toggle small{display:block}
+.finish-toggle strong{font-size:12px;color:#d9e7c9}
+.finish-toggle small{font-size:10px;color:#a9bba9;line-height:1.5;margin-top:5px}
+.finish-advice{color:#abbcaa!important;margin:17px 0 0!important;font-size:11px!important}
+@media(max-width:600px){.finish-desk{padding:15px}.finish-grid{grid-template-columns:1fr;gap:18px}}
