@@ -57,3 +57,13 @@ This analysis is **non-destructive**, never stored remotely, and is cancelled wh
 ### v1.2 manual QA
 
 Record a short take, open it, verify a visible waveform and moving playhead, drag both markers on desktop and mobile, nudge them with keyboard arrows, preview the selected range, export WAV, compare clip duration, then reopen the saved original to confirm no change.
+
+## v1.3: The finishing desk
+
+After choosing the clip's IN/OUT points, apply a -18 to +18 dB level adjustment, 0-5 second fade-in and fade-out, and optional peak normalization to -1 dBFS (calculated before fades; manual gain is applied afterward). Preview the selection with the same processing as the exported WAV using the browser's Web Audio API. Existing saved takes, raw-format downloads, and whole-take WAV exports are unchanged.
+
+**Important:** Peak normalization is not loudness (LUFS) normalization or noise removal. Gain beyond headroom can clip; PCM export hard-clamps samples. Fades automatically cap at half the selection. The processed preview needs a decoded buffer; recordings over the waveform safety threshold or unsupported codecs fall back to the original, unprocessed preview. The HTML playback bar always plays the original.
+
+### Manual testing
+
+Record a short speaking sample. Trim a segment. Set gain to -12 dB, add 0.5 second fades, preview and export finished WAV. Check the wave starts/ends near zero, normalization boosts a quiet sample, the original audio remains available, and changing takes resets the finishing desk. Test browser permissions and phone touch separately.

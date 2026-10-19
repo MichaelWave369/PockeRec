@@ -1,3 +1,5 @@
+import { calculateProcessing, applyProcessingSample } from './processing.js';
+
 export function formatTime(ms, tenths = false) {
   const total = Math.max(0, Math.floor(ms / (tenths ? 100 : 1000)));
   if (tenths) {
@@ -59,7 +61,7 @@ export function pcmClipFrames(buffer, startSeconds = 0, endSeconds = buffer.leng
 
 // Uncompressed signed 16-bit, interleaved PCM. Optional range is non-destructive.
 // Conversion never improves native codec quality.
-export function encodeWav(buffer, range) {
+export function encodeWav(buffer, range, finishing) {
   const channels = Math.min(2, buffer.numberOfChannels);
   if (channels < 1) throw new Error('No audio channels');
   const { start, length: frames } = range ? pcmClipFrames(buffer, range.startSeconds, range.endSeconds) : pcmClipFrames(buffer);
@@ -75,9 +77,12 @@ export function encodeWav(buffer, range) {
   view.setUint16(32, channels * 2, true); view.setUint16(34, 16, true);
   ascii(view, 36, 'data'); view.setUint32(40, bytes, true);
   const samples = Array.from({ length: channels }, (_, n) => buffer.getChannelData(n));
+  // Legacy two-argument export stays byte-for-byte equivalent to v1.2.
+  const fx = finishing ? calculateProcessing(buffer, start, start + frames, finishing) : null;
   let offset = 44;
   for (let i = 0; i < frames; i++) for (let c = 0; c < channels; c++) {
-    const sample = Math.max(-1, Math.min(1, samples[c][i + start]));
+    const original = samples[c][i + start];
+    const sample = fx ? applyProcessingSample(original, i, fx) : Math.max(-1, Math.min(1, original));
     view.setInt16(offset, sample < 0 ? Math.round(sample * 32768) : Math.round(sample * 32767), true);
     offset += 2;
   }
