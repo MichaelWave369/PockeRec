@@ -82,3 +82,15 @@ Notes: The high-pass and EQ use cookbook biquad filters. Gate and compressor are
 3. Preview the result, then export a finished WAV; listen for comparable processing, especially gate behavior and fade timing.
 4. Download the original recording and confirm its bytes and playback are unchanged.
 5. Test mobile range sliders and switching takes resets the effect settings.
+
+## v1.5: Local Preset Vault
+
+Four one-click starter sound presets: **Podcast Voice**, **DJ Drop**, **Warm Vocal**, and **Raw Music**. Applying a preset changes the non-destructive Effects Rack and Finishing Desk controls only. It never modifies any saved recording. These are useful starting points, not mastering guarantees; audition every take before exporting.
+
+Save up to **30 custom presets** to this browser, or export them as a versioned JSON file for backup and sharing. Import compatible preset JSON (maximum 64 KiB); foreign IDs are discarded, malformed values are rejected, and duplicates already saved locally are skipped by name. Both finishing controls and effects controls are included in each preset. Import/export contains **settings only**, never recorded audio.
+
+Presets use localStorage, separate from the existing IndexedDB recording library. If site storage is denied or corrupted, built-in presets still work, but the custom save/import controls are disabled with an explanation. The app does not add accounts, cloud storage, or any recording uploads.
+
+### v1.5 manual QA
+
+Create a 5-second recording, open the editor, apply each built-in preset, confirm the sliders update, and compare processed preview and finished WAV. Adjust controls, save a custom preset, reload, apply the saved settings to another take, export and delete the custom preset, and import it from the exported JSON. Check all controls on a phone and when site storage is denied.

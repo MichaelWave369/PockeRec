@@ -6,6 +6,7 @@ import { renderFinishedClip } from './render.js';
 import { hasTemporaryStorage, initStorage, listTakes, putTake, removeTake } from './storage.js';
 import ClipWaveform from './ClipWaveform.jsx';
 import { buildWaveformPeaks } from './waveform.js';
+import PresetVault from './PresetVault.jsx';
 
 const initialNote = 'Your browser will ask to use your microphone when you press record.';
 
@@ -567,12 +568,13 @@ export default function App() {
                   </div>
                   <p className="finish-advice">Effects run in this order: high-pass, EQ, gate, compressor, then finishing gain / normalization / fades. Gate and compressor are lightweight offline processors, not studio mastering tools. Preview the processed clip before exporting.</p>
                 </div>
+                <PresetVault finishing={finishing} effects={effects} onMessage={showToast} onApply={(preset) => { stopProcessedPreview(); setFinishing({ ...preset.finishing }); setEffects({ ...preset.effects }); showToast("Applied " + preset.name + ". Preview before exporting."); }} />
                 <div className="trim-actions"><button type="button" onClick={() => { if (processedPreview) stopProcessedPreview(); else void previewTrim(); }}>{processedPreview ? '■ Stop preview' : '▶ Preview processed'}</button><button type="button" onClick={() => { previewOnlyRef.current = false; stopProcessedPreview(); playerRef.current?.pause(); setTrimStart(0); setTrimEnd(clipDuration); }}>Reset trim</button><button className="export-clip" disabled={exporting !== null || trimEnd <= trimStart} type="button" onClick={() => downloadWav(selected, true)}>{exporting === `clip:${selected.id}` ? 'Exporting…' : '↓ Export finished WAV'}</button></div>
               </> : <p className="trim-unavailable">Clip editing will be available once this audio's duration can be determined.</p>}
             </div>
           </section>}
         </main>
-        <footer><span>POCKETREC / V1.4</span><span>RECORD FREELY. SHARE INTENTIONALLY.</span><span>REACT + VITE • MIT</span></footer>
+        <footer><span>POCKETREC / V1.5</span><span>RECORD FREELY. SHARE INTENTIONALLY.</span><span>REACT + VITE • MIT</span></footer>
       </div>
       <div className={`toast ${toast ? 'show' : ''}`} role="status" aria-live="polite">{toast}</div>
     </>
