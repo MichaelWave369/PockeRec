@@ -7,6 +7,8 @@ import { hasTemporaryStorage, initStorage, listTakes, putTake, removeTake } from
 import ClipWaveform from './ClipWaveform.jsx';
 import { buildWaveformPeaks } from './waveform.js';
 import PresetVault from './PresetVault.jsx';
+import AudioImporter from './AudioImporter.jsx';
+import { MAX_IMPORT_BATCH, validateImportFile, validateDecodedAudio, makeImportedTake, importedDownloadExtension, inspectAudioMetadata } from './imports.js';
 
 const initialNote = 'Your browser will ask to use your microphone when you press record.';
 
@@ -89,7 +91,7 @@ function TakeCard({ take, onPlay, onRename, onDelete, onDownload, onWav, exporti
           <input className="clip-title" aria-label={`Rename ${take.name}`} value={draft} maxLength={120}
             onChange={(event) => setDraft(event.target.value)} onBlur={saveName}
             onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { setDraft(take.name); event.currentTarget.blur(); } }} />
-          <div className="clip-meta">{new Date(take.createdAt).toLocaleDateString()} · {formatTime(take.durationMs)} · {formatSize(take.blob.size)} · {take.mode === 'raw' ? 'Raw' : 'Voice'}</div>
+          <div className="clip-meta">{new Date(take.createdAt).toLocaleDateString()} · {formatTime(take.durationMs)} · {formatSize(take.blob.size)} · {take.mode === 'imported' ? 'Imported' : take.mode === 'raw' ? 'Raw' : 'Voice'}</div>
         </div>
       </div>
       <div className="clip-actions">
@@ -123,6 +125,8 @@ export default function App() {
   const [finishing, setFinishing] = useState({ ...DEFAULT_FINISH });
   const [effects, setEffects] = useState({ ...DEFAULT_EFFECTS });
   const [processedPreview, setProcessedPreview] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importFeedback, setImportFeedback] = useState(null);
   const phaseRef = useRef('idle');
   const analyserRef = useRef(null);
   const streamRef = useRef(null);
@@ -142,6 +146,7 @@ export default function App() {
   const decodedBufferRef = useRef(null);
   const processedPreviewRef = useRef(null);
   const toastTimerRef = useRef(null);
+  const importingRef = useRef(false);
 
   const setRecordingPhase = (value) => { phaseRef.current = value; if (mountedRef.current) setPhase(value); };
   const showNote = (value, isError = false) => { if (mountedRef.current) { setNote(value); setNoteError(isError); } };
@@ -454,7 +459,59 @@ export default function App() {
     }
   }
 
-  function downloadTake(take) { downloadBlob(take.blob, `${safeFilename(take.name)}.${extensionFor(take.mimeType || take.blob.type)}`); }
+  function downloadTake(take) {
+    const ext=importedDownloadExtension(take) || extensionFor(take.mimeType || take.blob.type);
+    downloadBlob(take.blob, safeFilename(take.name)+'.'+ext);
+  }
+
+  async function importAudioFiles(files) {
+    if (importingRef.current || phaseRef.current !== 'idle') return;
+    const chosen=Array.from(files || []);
+    if (chosen.length===0) return;
+    if (chosen.length>MAX_IMPORT_BATCH) {
+      setImportFeedback({error:true,text:'Select up to 8 audio files at a time.'});
+      return;
+    }
+    importingRef.current=true;
+    setImporting(true);
+    setImportFeedback({error:false,text:'Checking and importing '+chosen.length+' audio file(s)…'});
+    let imported=0;
+    const errors=[];
+    for (const file of chosen) {
+      let context;
+      try {
+        validateImportFile(file);
+        // Browser metadata first, to reject excessively long compressed files
+        // before allocating a decoded PCM buffer.
+        const announcedDuration=await inspectAudioMetadata(file);
+        validateDecodedAudio(announcedDuration,1);
+        const Context=window.AudioContext || window.webkitAudioContext;
+        if(!Context) throw new Error('Web Audio decoding is unavailable in this browser.');
+        context=new Context();
+        const decoded=await context.decodeAudioData(await file.arrayBuffer());
+        validateDecodedAudio(decoded.duration,decoded.numberOfChannels);
+        const take=makeImportedTake(file,decoded.duration,decoded.numberOfChannels);
+        await putTake(take);
+        imported++;
+      } catch(error) {
+        errors.push((file?.name || 'Unknown file')+': '+(error?.message || 'Import failed.'));
+      } finally {
+        if(context) await context.close().catch(()=>{});
+      }
+    }
+    try { await refreshTakes(); }
+    catch(error) { errors.push('Could not refresh library: '+error.message); }
+    if(mountedRef.current) {
+      const summary=imported+' imported'+(errors.length?', '+errors.length+' failed.':'.')+
+        (hasTemporaryStorage() && imported?' Temporary storage: download your audio to keep it.':'');
+      setImportFeedback({error:errors.length>0,text:summary+(errors.length?' '+errors.slice(0,3).join(' | '):'')});
+      showToast(summary);
+      setImporting(false);
+    }
+    importingRef.current=false;
+  }
+
+
 
   async function downloadWav(take, clip = false) {
     if (exporting !== null) return;
@@ -520,7 +577,8 @@ export default function App() {
             <section className="panel library-panel" aria-labelledby="library-heading">
               <div className="panel-top"><div><p className="section-index">02 / LIBRARY</p><h2 id="library-heading">Saved takes</h2></div>
                 <span className="take-count">{takes.length} {takes.length === 1 ? 'TAKE' : 'TAKES'}</span></div>
-              <p className="library-intro">Recordings are stored in this browser on this device. Keep important ones by downloading them.</p>
+              <p className="library-intro">Saved takes and imported audio stay in this browser on this device. Download anything important.</p>
+              <AudioImporter onFiles={importAudioFiles} busy={importing} disabled={phase !== 'idle'} feedback={importFeedback} />
               <div className="take-list" aria-live="polite">{takes.length === 0 ?
                 <div className="empty-library"><span className="empty-icon" aria-hidden="true">♫</span><strong>Nothing on tape. Yet.</strong><span>Hit record and your first take will land here.</span></div>
                 : takes.map((take) => <TakeCard key={take.id} take={take} onPlay={playTake} onRename={renameTake} onDelete={deleteTake} onDownload={downloadTake} onWav={downloadWav} exporting={exporting} />)}</div>
@@ -574,7 +632,7 @@ export default function App() {
             </div>
           </section>}
         </main>
-        <footer><span>POCKETREC / V1.5</span><span>RECORD FREELY. SHARE INTENTIONALLY.</span><span>REACT + VITE • MIT</span></footer>
+        <footer><span>POCKETREC / V1.6</span><span>RECORD FREELY. SHARE INTENTIONALLY.</span><span>REACT + VITE • MIT</span></footer>
       </div>
       <div className={`toast ${toast ? 'show' : ''}`} role="status" aria-live="polite">{toast}</div>
     </>

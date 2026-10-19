@@ -94,3 +94,15 @@ Presets use localStorage, separate from the existing IndexedDB recording library
 ### v1.5 manual QA
 
 Create a 5-second recording, open the editor, apply each built-in preset, confirm the sliders update, and compare processed preview and finished WAV. Adjust controls, save a custom preset, reload, apply the saved settings to another take, export and delete the custom preset, and import it from the exported JSON. Check all controls on a phone and when site storage is denied.
+
+## v1.6: Audio Import Studio
+
+**Bring existing audio into the same take library:** use the Choose Audio Files button or drag audio files onto the importer. Supported extensions: .wav/.wave, .mp3, .m4a/.mp4 audio, .ogg/.oga, .webm and .flac. Actual codec support depends on the browser and platform. The importer validates filenames, rejects empty/non-audio/oversize files, reads audio metadata before decoding to reject long compressed files, and requires successful Web Audio decoding before saving. Up to 8 files per batch, **32 MiB per file**, **10 minutes maximum duration**, mono or stereo. Unsupported, corrupt or out-of-range files are rejected with reasons.
+
+The original audio file Blob is stored **unchanged** in the existing browser-only IndexedDB take library, with a fresh ID and an **Imported** label. Existing playback, waveform, trims, effects, presets, and non-destructive WAV export work with these takes. Original-format downloads retain the imported filename's recognized extension, even if the browser omits the MIME type. The original filename is reduced to a safe display name. Duplicate names are stored as distinct recordings. No server requests, uploads, trackers or external dependencies are introduced.
+
+Browser storage is **not a backup**. If quota or IndexedDB restrictions cause volatile fallback, the importer warns to download your files before the session ends. Large/highly compressed audio decoding can still consume significant RAM, so audio clips are bounded and imported sequentially. Avoid importing copyrighted recordings unless you have the rights to use and distribute any exported results.
+
+### v1.6 QA plan
+
+Import a WAV and MP3 through the picker, and try dragging multiple files. Verify filenames, durations, imported labels, playback, effect presets, clip export, and original downloads. Try a corrupt MP3, a renamed non-audio file, a 0-byte file, a too-long file, and a batch with mixed valid/invalid inputs. Reload to verify IndexedDB persistence; test browser codec differences on mobile.
