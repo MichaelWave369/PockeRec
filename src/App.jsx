@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { chooseMimeType, downloadBlob, encodeWav, extensionFor, formatSize, formatTime, pcmClipFrames, safeFilename } from './audio.js';
-import { DEFAULT_FINISH, calculateProcessing, NORMALIZE_TARGET_DB } from './processing.js';
+import { DEFAULT_FINISH, NORMALIZE_TARGET_DB } from './processing.js';
+import { DEFAULT_EFFECTS } from './effects.js';
+import { renderFinishedClip } from './render.js';
 import { hasTemporaryStorage, initStorage, listTakes, putTake, removeTake } from './storage.js';
 import ClipWaveform from './ClipWaveform.jsx';
 import { buildWaveformPeaks } from './waveform.js';
@@ -118,6 +120,7 @@ export default function App() {
   const [waveStatus, setWaveStatus] = useState('idle');
   const [playerTime, setPlayerTime] = useState(0);
   const [finishing, setFinishing] = useState({ ...DEFAULT_FINISH });
+  const [effects, setEffects] = useState({ ...DEFAULT_EFFECTS });
   const [processedPreview, setProcessedPreview] = useState(false);
   const phaseRef = useRef('idle');
   const analyserRef = useRef(null);
@@ -174,6 +177,7 @@ export default function App() {
     setPlayerTime(0); setWavePeaks(null); setWaveStatus('idle');
     decodedBufferRef.current = null;
     setFinishing({ ...DEFAULT_FINISH });
+    setEffects({ ...DEFAULT_EFFECTS });
   }
 
   useEffect(() => {
@@ -397,67 +401,48 @@ export default function App() {
     if (!player || trimEnd <= trimStart) return;
     stopProcessedPreview();
     const decoded = decodedBufferRef.current;
-    if (decoded) {
-      let context;
-      try {
-        const frames = pcmClipFrames(decoded, trimStart, trimEnd);
-        const fx = calculateProcessing(decoded, frames.start, frames.end, finishing);
-        const Context = window.AudioContext || window.webkitAudioContext;
-        if (!Context) throw new Error('Web Audio unavailable');
-        context = new Context();
-        player.pause();
-        previewOnlyRef.current = false;
-        const source = context.createBufferSource();
-        source.buffer = decoded;
-        const volume = context.createGain();
-        source.connect(volume);
-        volume.connect(context.destination);
-        const session = { context, source, raf: 0 };
-        processedPreviewRef.current = session;
-        setProcessedPreview(true);
-        await context.resume();
-        if (processedPreviewRef.current !== session) return;
-        const when = context.currentTime + 0.02;
-        const length = frames.length / decoded.sampleRate;
-        const start = frames.start / decoded.sampleRate;
-        const finish = when + length;
-        const fadeIn = fx.fadeInFrames / decoded.sampleRate;
-        const fadeOut = fx.fadeOutFrames / decoded.sampleRate;
-        volume.gain.setValueAtTime(fadeIn ? 0 : fx.gain, when);
-        if (fadeIn) volume.gain.linearRampToValueAtTime(fx.gain, when + fadeIn);
-        if (fadeOut) {
-          volume.gain.setValueAtTime(fx.gain, finish - fadeOut);
-          volume.gain.linearRampToValueAtTime(0, finish);
-        }
-        source.onended = () => {
-          if (processedPreviewRef.current !== session) return;
-          processedPreviewRef.current = null;
-          if (session.raf) cancelAnimationFrame(session.raf);
-          void context.close().catch(() => {});
-          if (mountedRef.current) setProcessedPreview(false);
-        };
-        source.start(when, start, length);
-        const tick = () => {
-          if (processedPreviewRef.current !== session) return;
-          const played = Math.max(0, context.currentTime - when);
-          setPlayerTime(Math.min(trimEnd, start + played));
-          session.raf = requestAnimationFrame(tick);
-        };
-        session.raf = requestAnimationFrame(tick);
-        return;
-      } catch (error) {
-        console.warn('Processed preview unavailable', error);
-        stopProcessedPreview();
-        if (context) void context.close().catch(() => {});
-        showToast('Processed preview unavailable; playing original selection.');
-      }
+    if (!decoded) {
+      showToast('Processed preview requires decoded audio. Use the original player.');
+      return;
     }
+    let context;
     try {
-      player.pause();
-      player.currentTime = trimStart;
-      previewOnlyRef.current = true;
-      player.play().catch(() => { previewOnlyRef.current = false; showToast('Preview unavailable. Try the standard player.'); });
-    } catch (error) { console.error(error); previewOnlyRef.current = false; showToast('Unable to preview this selection.'); }
+      const rendered = renderFinishedClip(decoded, { startSeconds:trimStart, endSeconds:trimEnd }, finishing, effects);
+      const Context = window.AudioContext || window.webkitAudioContext;
+      if (!Context) throw new Error('Web Audio unavailable');
+      context = new Context();
+      player.pause(); previewOnlyRef.current = false;
+      const playback = context.createBuffer(rendered.numberOfChannels,rendered.length,rendered.sampleRate);
+      for(let ch=0;ch<rendered.numberOfChannels;ch++) playback.copyToChannel(rendered.getChannelData(ch),ch);
+      const source=context.createBufferSource();
+      source.buffer=playback;
+      source.connect(context.destination);
+      const session={context,source,raf:0};
+      processedPreviewRef.current=session;
+      setProcessedPreview(true);
+      await context.resume();
+      if(processedPreviewRef.current!==session) return;
+      const when=context.currentTime+.02, length=rendered.length/rendered.sampleRate;
+      source.onended=()=>{
+        if(processedPreviewRef.current!==session) return;
+        processedPreviewRef.current=null;
+        if(session.raf) cancelAnimationFrame(session.raf);
+        void context.close().catch(()=>{});
+        if(mountedRef.current) setProcessedPreview(false);
+      };
+      source.start(when,0,length);
+      const tick=()=>{
+        if(processedPreviewRef.current!==session) return;
+        setPlayerTime(Math.min(trimEnd,trimStart+Math.max(0,context.currentTime-when)));
+        session.raf=requestAnimationFrame(tick);
+      };
+      session.raf=requestAnimationFrame(tick);
+    } catch(error) {
+      console.warn('Processed preview failed',error);
+      stopProcessedPreview();
+      if(context) void context.close().catch(()=>{});
+      showToast('Could not process this clip. Shorten the selection or try again.');
+    }
   }
 
   function onPreviewProgress(event) {
@@ -482,7 +467,8 @@ export default function App() {
       const buffer = await ctx.decodeAudioData(data);
       const range = clip ? { startSeconds: trimStart, endSeconds: trimEnd } : undefined;
       const suffix = clip ? `-clip-${formatTime(trimStart * 1000, true).replace(':', 'm').replace('.', 's')}-${formatTime(trimEnd * 1000, true).replace(':', 'm').replace('.', 's')}` : '';
-      downloadBlob(encodeWav(buffer, range, clip ? finishing : undefined), `${safeFilename(take.name)}${suffix}.wav`);
+      const output = clip ? encodeWav(renderFinishedClip(buffer, range, finishing, effects)) : encodeWav(buffer);
+      downloadBlob(output, `${safeFilename(take.name)}${suffix}.wav`);
       showToast(clip ? 'Trimmed WAV downloaded. Original take preserved.' : 'WAV file downloaded.');
     } catch (error) { console.error('WAV export failed', error); showToast('Could not decode/export WAV. Try the original download.'); }
     finally { if (ctx) await ctx.close().catch(() => {}); if (mountedRef.current) setExporting(null); }
@@ -545,7 +531,7 @@ export default function App() {
             <audio ref={playerRef} controls preload="metadata" src={playerUrl} onLoadedMetadata={onAudioMetadata} onTimeUpdate={(event) => { if (!processedPreviewRef.current) setPlayerTime(event.currentTarget.currentTime); onPreviewProgress(event); }} onSeeked={(event) => { if (!processedPreviewRef.current) setPlayerTime(event.currentTarget.currentTime); }} onPlay={stopProcessedPreview} onPause={() => { previewOnlyRef.current = false; }} />
             <div className="trim-editor" aria-label="Non-destructive audio clip editor">
               <div className="trim-head"><div><span className="trim-eyebrow">03 / CLIP EDITOR</span><h2>Keep the good part.</h2></div><span className="trim-time">{formatTime(Math.max(0, trimEnd - trimStart) * 1000, true)} SELECTED</span></div>
-              <p>Trim on the waveform, polish with gain and fades, preview your changes, then export a new WAV. Your original recording stays untouched.</p>
+              <p>Trim on the waveform, shape the sound with the effects rack and finishing desk, then preview and export a WAV. Your original take stays untouched.</p>
               {clipDuration > 0 ? <>
                 {waveStatus === 'ready' && wavePeaks ? <ClipWaveform peaks={wavePeaks} duration={clipDuration} start={trimStart} end={trimEnd} playhead={playerTime} onBoundaryChange={setTrimBoundary} onSeek={seekTimeline} /> : <>
                   <div className="trim-track" role="img" aria-label="Approximate clip selection without waveform">
@@ -567,12 +553,26 @@ export default function App() {
                   </div>
                   <p className="finish-advice">Fades are limited to half the selected clip. Higher gain may clip loud recordings; exported PCM is safely clamped. Normalization boosts quiet audio but does not remove noise or repair distortion.</p>
                 </div>
+
+                <div className="effects-rack" aria-label="Audio effects rack">
+                  <div className="finish-heading"><div><span className="trim-eyebrow">05 / AUDIO EFFECTS RACK</span><h3>Clean it up. Shape the tone.</h3></div><button type="button" onClick={() => { stopProcessedPreview(); setEffects({ ...DEFAULT_EFFECTS }); }}>Reset rack</button></div>
+                  <div className="rack-grid">
+                    <label className="finish-control"><span>High-pass <strong>{effects.highPassHz ? `${effects.highPassHz} Hz` : 'OFF'}</strong></span><input aria-label="High-pass frequency" type="range" min="0" max="400" step="10" value={effects.highPassHz} onChange={event=>{ stopProcessedPreview(); setEffects(v=>({...v,highPassHz:Number(event.target.value)})); }} /><small>Remove low-end rumble and handling noise.</small></label>
+                    <label className="finish-control"><span>Low EQ <strong>{effects.lowDb>0?'+':''}{effects.lowDb} dB</strong></span><input aria-label="Low EQ gain" type="range" min="-12" max="12" step="1" value={effects.lowDb} onChange={event=>{ stopProcessedPreview(); setEffects(v=>({...v,lowDb:Number(event.target.value)})); }} /><small>Warmth · around 180 Hz</small></label>
+                    <label className="finish-control"><span>Mid EQ <strong>{effects.midDb>0?'+':''}{effects.midDb} dB</strong></span><input aria-label="Mid EQ gain" type="range" min="-12" max="12" step="1" value={effects.midDb} onChange={event=>{ stopProcessedPreview(); setEffects(v=>({...v,midDb:Number(event.target.value)})); }} /><small>Presence · around 1.3 kHz</small></label>
+                    <label className="finish-control"><span>High EQ <strong>{effects.highDb>0?'+':''}{effects.highDb} dB</strong></span><input aria-label="High EQ gain" type="range" min="-12" max="12" step="1" value={effects.highDb} onChange={event=>{ stopProcessedPreview(); setEffects(v=>({...v,highDb:Number(event.target.value)})); }} /><small>Air · around 4.6 kHz</small></label>
+                    <label className="finish-control"><span>Noise gate <strong>{effects.gateThresholdDb<=-80 ? 'OFF' : `${effects.gateThresholdDb} dBFS`}</strong></span><input aria-label="Noise gate threshold" type="range" min="-80" max="-15" step="1" value={effects.gateThresholdDb} onChange={event=>{ stopProcessedPreview(); setEffects(v=>({...v,gateThresholdDb:Number(event.target.value)})); }} /><small>Suppress softer background passages.</small></label>
+                    <label className="finish-control"><span>Compressor <strong>{effects.compressorThresholdDb===0 ? 'OFF' : `${effects.compressorThresholdDb} dBFS`}</strong></span><input aria-label="Compressor threshold" type="range" min="-40" max="0" step="1" value={effects.compressorThresholdDb} onChange={event=>{ stopProcessedPreview(); setEffects(v=>({...v,compressorThresholdDb:Number(event.target.value)})); }} /><small>Control loudness peaks.</small></label>
+                    <label className="finish-control"><span>Compressor ratio <strong>{effects.compressorRatio}:1</strong></span><input aria-label="Compressor ratio" type="range" min="1" max="8" step="1" value={effects.compressorRatio} onChange={event=>{ stopProcessedPreview(); setEffects(v=>({...v,compressorRatio:Number(event.target.value)})); }} /><small>Higher ratios produce stronger compression.</small></label>
+                  </div>
+                  <p className="finish-advice">Effects run in this order: high-pass, EQ, gate, compressor, then finishing gain / normalization / fades. Gate and compressor are lightweight offline processors, not studio mastering tools. Preview the processed clip before exporting.</p>
+                </div>
                 <div className="trim-actions"><button type="button" onClick={() => { if (processedPreview) stopProcessedPreview(); else void previewTrim(); }}>{processedPreview ? '■ Stop preview' : '▶ Preview processed'}</button><button type="button" onClick={() => { previewOnlyRef.current = false; stopProcessedPreview(); playerRef.current?.pause(); setTrimStart(0); setTrimEnd(clipDuration); }}>Reset trim</button><button className="export-clip" disabled={exporting !== null || trimEnd <= trimStart} type="button" onClick={() => downloadWav(selected, true)}>{exporting === `clip:${selected.id}` ? 'Exporting…' : '↓ Export finished WAV'}</button></div>
               </> : <p className="trim-unavailable">Clip editing will be available once this audio's duration can be determined.</p>}
             </div>
           </section>}
         </main>
-        <footer><span>POCKETREC / V1.3</span><span>RECORD FREELY. SHARE INTENTIONALLY.</span><span>REACT + VITE • MIT</span></footer>
+        <footer><span>POCKETREC / V1.4</span><span>RECORD FREELY. SHARE INTENTIONALLY.</span><span>REACT + VITE • MIT</span></footer>
       </div>
       <div className={`toast ${toast ? 'show' : ''}`} role="status" aria-live="polite">{toast}</div>
     </>

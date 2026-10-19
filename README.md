@@ -67,3 +67,18 @@ After choosing the clip's IN/OUT points, apply a -18 to +18 dB level adjustment,
 ### Manual testing
 
 Record a short speaking sample. Trim a segment. Set gain to -12 dB, add 0.5 second fades, preview and export finished WAV. Check the wave starts/ends near zero, normalization boosts a quiet sample, the original audio remains available, and changing takes resets the finishing desk. Test browser permissions and phone touch separately.
+
+## v1.4: Offline Audio Effects Rack
+
+PockeRec adds a 0–400 Hz high-pass rumble filter, independent low/mid/high EQ (±12 dB shelving/peaking), a simple smoothed gate, and a threshold/ratio compressor. Open a take and trim, set the effects, then preview and export a finished WAV.
+
+Both processed preview and finished WAV export use the **same deterministic sample-domain renderer**. Effects run high-pass → EQ → gate → compressor → peak normalization (if enabled) → manual gain → fades. Preview uses a Web Audio AudioBuffer assembled from the rendered samples; WAV encodes those same samples. Browser-native playback and whole-take WAV downloads remain unprocessed. Source recordings remain untouched. No cloud services or external DSP dependencies.
+
+Notes: The high-pass and EQ use cookbook biquad filters. Gate and compressor are intentionally lightweight and can produce artifacts on difficult material. This is not AI denoising, limiting, or professional loudness mastering. Finished clips render in memory, capped at about 160 MiB of float channel data; shorten very long selections. On browsers unable to decode a take, the app will not label raw audio as a processed preview.
+
+### v1.4 manual QA
+1. Record a spoken phrase and open its editor, verify the waveform and reset controls.
+2. Move high-pass to 120 Hz, lower the lows, boost the mids, enable the gate below the speech floor and compressor around -20 dBFS.
+3. Preview the result, then export a finished WAV; listen for comparable processing, especially gate behavior and fade timing.
+4. Download the original recording and confirm its bytes and playback are unchanged.
+5. Test mobile range sliders and switching takes resets the effect settings.
