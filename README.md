@@ -47,3 +47,13 @@ Real microphone capture cannot be reliably validated in CI. On your PC or phone:
 ## License
 
 [MIT](LICENSE)
+
+## v1.2 waveform timeline
+
+When you open a saved take, PockeRec decodes it locally into a 512-column peak envelope and displays a waveform in the clip editor. Drag the **IN** and **OUT** markers directly, or tab to either handle and use left/right arrows (Shift for bigger increments). Click/tap the waveform to seek. The existing precise range sliders and original-format playback are retained. The playhead follows playback.
+
+This analysis is **non-destructive**, never stored remotely, and is cancelled when switching takes. Files over 80 MiB or recordings longer than 90 minutes skip visualization to avoid an automatic large decode; the sliders still work. If audio decoding fails, trimming controls remain accessible. Waveform peaks are a bounded visual approximation, not sample-accurate DSP; the WAV export uses the existing exact sample-frame clip calculation.
+
+### v1.2 manual QA
+
+Record a short take, open it, verify a visible waveform and moving playhead, drag both markers on desktop and mobile, nudge them with keyboard arrows, preview the selected range, export WAV, compare clip duration, then reopen the saved original to confirm no change.
